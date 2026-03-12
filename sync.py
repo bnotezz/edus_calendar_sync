@@ -16,6 +16,15 @@ class SchoolSync:
         self.service = build('calendar', 'v3', credentials=creds)
         self.today = datetime.now().date()
 
+    def send_telegram_alert(self, message):
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+        if bot_token and chat_id:
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            try:
+                requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=10)
+            except: pass
+
     def fetch_data(self, path, params=None):
         response = requests.get(f"{self.host}/api/{path}", headers=self.headers, params=params)
         response.raise_for_status()
@@ -77,17 +86,17 @@ class SchoolSync:
                 name = obj.get('name', 'Без назви')
                 obj_type = obj.get('type')
                 
-                # Безпечне отримання імені вчителя
                 user_info = item.get('user') or {}
                 teacher = user_info.get('username', 'Не вказано')
                 desc = f"Вчитель: {teacher}"
                 
-                # Логіка Emoji та типів
+                # Логіка для харчування
                 if name in ["Сніданок", "Обід", "Вечеря"]:
                     day_menu = menu_map.get(item['week_day'], [])
                     dish = next((d for d in day_menu if d['event_name'] == name), None)
-                    summary = f"🍽️ {name}: {dish['dish'].split(',')[0]}" if dish else f"🍽️ {name}"
-                    desc = f"🥗 Повне меню: {dish['dish']}" if dish else ""
+                    summary = f"🍽️ {name}" # Назва без меню
+                    desc = dish['dish'] if dish else "" # Тільки текст меню в описі
+                # Логіка для інших типів подій
                 elif obj_type == 'lesson':
                     summary = f"📚 {name}"
                 elif obj_type == 'event':
