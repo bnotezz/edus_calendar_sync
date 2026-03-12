@@ -21,11 +21,10 @@ class SchoolSync:
         response.raise_for_status()
         data = response.json()
         
-        # Логування кількості знайдених записів
         count = 0
         if 'schedule' in data: count = len(data['schedule'])
         elif 'menu' in data: count = len(data['menu'])
-        elif '1' in data: count = len(data['1']) # для exclude-day
+        elif '1' in data: count = len(data['1'])
         print(f"📡 Отримано дані з {path}. Знайдено записів: {count}")
         return data
 
@@ -39,7 +38,7 @@ class SchoolSync:
         if sem2:
             holidays.append({
                 "id": f"summer{sem2['id']}",
-                "name": "Літні", # "канікули" додамо в upsert
+                "name": "Літні",
                 "start_day": sem2['end_date'],
                 "end_day": f"{sem2['end_date'][:4]}-08-31"
             })
@@ -48,19 +47,14 @@ class SchoolSync:
             end_dt_obj = datetime.strptime(h['end_day'], '%Y-%m-%d').date()
             if end_dt_obj < self.today: continue
 
-            # Google Calendar All-day: end_date не включається, тому додаємо +1 день
             gcal_end = (end_dt_obj + timedelta(days=1)).strftime('%Y-%m-%d')
-            
             name = h['name'] if "канікули" in h['name'].lower() else f"{h['name']} канікули"
-            event_id = f"hol{h['id']}".replace("-", "")
             
-            self.upsert_event(event_id, f"🏖️ {name}", "Відпочинок", 
+            self.upsert_event(f"hol{h['id']}".replace("-", ""), f"🏖️ {name}", "Відпочинок", 
                              h['start_day'], gcal_end, is_all_day=True, transparency='transparent')
 
     def sync_schedule_flow(self):
         print("📚 Початок синхронізації розкладу...")
-        
-        # Визначаємо понеділки
         current_monday = self.today - timedelta(days=self.today.weekday())
         next_monday = current_monday + timedelta(days=7)
         
@@ -72,7 +66,6 @@ class SchoolSync:
 
         for monday in weeks:
             start_date_str = monday.strftime('%Y-%m-%d')
-            # Використовуємо правильний параметр start_date
             schedule_data = self.fetch_data(f"schedule/for-user/{self.user_uuid}/", 
                                           params={"start_date": start_date_str})
             
@@ -80,16 +73,27 @@ class SchoolSync:
                 event_date = datetime.strptime(item['date'], '%Y-%m-%d').date()
                 if event_date < self.today: continue
 
-                name = item['schedule_object']['name']
-                desc = f"Вчитель: {item.get('user', {}).get('username', 'Не вказано')}"
+                obj = item.get('schedule_object', {})
+                name = obj.get('name', 'Без назви')
+                obj_type = obj.get('type')
                 
+                # Безпечне отримання імені вчителя
+                user_info = item.get('user') or {}
+                teacher = user_info.get('username', 'Не вказано')
+                desc = f"Вчитель: {teacher}"
+                
+                # Логіка Emoji та типів
                 if name in ["Сніданок", "Обід", "Вечеря"]:
                     day_menu = menu_map.get(item['week_day'], [])
                     dish = next((d for d in day_menu if d['event_name'] == name), None)
                     summary = f"🍽️ {name}: {dish['dish'].split(',')[0]}" if dish else f"🍽️ {name}"
                     desc = f"🥗 Повне меню: {dish['dish']}" if dish else ""
-                else:
+                elif obj_type == 'lesson':
                     summary = f"📚 {name}"
+                elif obj_type == 'event':
+                    summary = f"🔔 {name}"
+                else:
+                    summary = f"📝 {name}"
 
                 self.upsert_event(f"sch{item['id']}", summary, desc, 
                                  f"{item['date']}T{item['start_time']}:00", 
@@ -97,7 +101,7 @@ class SchoolSync:
                                  transparency='opaque')
                 total_saved += 1
 
-        print(f"✅ Синхронізація завершена. Всього збережено подій у календар: {total_saved}")
+        print(f"✅ Синхронізація завершена. Всього збережено/оновлено подій: {total_saved}")
 
     def upsert_event(self, eid, summary, desc, start, end, is_all_day=False, transparency='opaque'):
         t_key = 'date' if is_all_day else 'dateTime'
@@ -105,7 +109,7 @@ class SchoolSync:
             'id': eid, 'summary': summary, 'description': desc,
             'start': {t_key: start, 'timeZone': 'Europe/Kyiv'},
             'end': {t_key: end, 'timeZone': 'Europe/Kyiv'},
-            'transparency': transparency # 'transparent' (Free) або 'opaque' (Busy)
+            'transparency': transparency
         }
         try:
             self.service.events().insert(calendarId=self.calendar_id, body=body).execute()
