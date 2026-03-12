@@ -1,0 +1,32 @@
+name: School Calendar Sync
+on:
+  schedule:
+    - cron: "0 4 * * *"  # Щодня о 04:00 для уроків та меню
+    - cron: "0 5 * * 0"  # Щонеділі о 05:00 для канікул
+  workflow_dispatch:      # Ручний запуск
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with: {python-version: '3.9'}
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Execute
+        env:
+          SCHOOL_HOST: ${{ secrets.SCHOOL_HOST }}
+          SCHOOL_TOKEN: ${{ secrets.SCHOOL_TOKEN }}
+          SCHOOL_USER_UUID: ${{ secrets.SCHOOL_USER_UUID }}
+          GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ "${{ github.event.schedule }}" == "0 5 * * 0" ]; then
+            python sync.py --mode holidays
+          else
+            python sync.py --mode daily
+          fi
