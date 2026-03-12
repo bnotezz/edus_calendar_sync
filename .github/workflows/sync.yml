@@ -1,17 +1,17 @@
 name: School Calendar Sync
 on:
   schedule:
-    - cron: "0 4 * * *"  # Щодня о 04:00
-    - cron: "0 5 * * 0"  # Щонеділі о 05:00
-  workflow_dispatch:      # Ручний запуск
+    - cron: "0 4 * * *"
+    - cron: "0 5 * * 0"
+  workflow_dispatch:
     inputs:
       mode:
-        description: 'Оберіть режим синхронізації'
+        description: 'Режим'
         required: true
-        default: 'daily'
+        default: 'schedule'
         type: choice
         options:
-          - daily
+          - schedule
           - holidays
 
 jobs:
@@ -35,13 +35,12 @@ jobs:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
-          # Логіка вибору режиму: пріоритет у ручного вибору, потім розклад
           MODE="${{ github.event.inputs.mode }}"
           if [ -z "$MODE" ]; then
             if [ "${{ github.event.schedule }}" == "0 5 * * 0" ]; then
               MODE="holidays"
             else
-              MODE="daily"
+              MODE="schedule"
             fi
           fi
           echo "🚀 Запуск у режимі: $MODE"

@@ -14,22 +14,20 @@ class SchoolSync:
         self.user_uuid = user_uuid
         creds = service_account.Credentials.from_service_account_info(credentials_info)
         self.service = build('calendar', 'v3', credentials=creds)
-        # Поточна дата для фільтрації
         self.today = datetime.now().date()
-
-    def send_telegram_alert(self, message):
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-        chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-        if bot_token and chat_id:
-            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-            try:
-                requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=10)
-            except: pass
 
     def fetch_data(self, path, params=None):
         response = requests.get(f"{self.host}/api/{path}", headers=self.headers, params=params)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        
+        # Логування кількості знайдених записів
+        count = 0
+        if 'schedule' in data: count = len(data['schedule'])
+        elif 'menu' in data: count = len(data['menu'])
+        elif '1' in data: count = len(data['1']) # для exclude-day
+        print(f"📡 Отримано дані з {path}. Знайдено записів: {count}")
+        return data
 
     def sync_holidays(self):
         print("🏖️ Синхронізація канікул...")
@@ -41,53 +39,50 @@ class SchoolSync:
         if sem2:
             holidays.append({
                 "id": f"summer{sem2['id']}",
-                "name": "Літні канікули",
+                "name": "Літні", # "канікули" додамо в upsert
                 "start_day": sem2['end_date'],
                 "end_day": f"{sem2['end_date'][:4]}-08-31"
             })
 
         for h in holidays:
-            # Фільтрація: не зберігаємо канікули, що вже закінчилися
-            end_date = datetime.strptime(h['end_day'], '%Y-%m-%d').date()
-            if end_date < self.today:
-                continue
+            end_dt_obj = datetime.strptime(h['end_day'], '%Y-%m-%d').date()
+            if end_dt_obj < self.today: continue
 
+            # Google Calendar All-day: end_date не включається, тому додаємо +1 день
+            gcal_end = (end_dt_obj + timedelta(days=1)).strftime('%Y-%m-%d')
+            
+            name = h['name'] if "канікули" in h['name'].lower() else f"{h['name']} канікули"
             event_id = f"hol{h['id']}".replace("-", "")
-            self.upsert_event(event_id, f"🏖️ {h['name']}", "Шкільні канікули", h['start_day'], h['end_day'], True)
+            
+            self.upsert_event(event_id, f"🏖️ {name}", "Відпочинок", 
+                             h['start_day'], gcal_end, is_all_day=True, transparency='transparent')
 
-    def sync_daily(self):
+    def sync_schedule_flow(self):
         print("📚 Початок синхронізації розкладу...")
         
-        # Вираховуємо дати для запитів (поточний понеділок та наступний)
+        # Визначаємо понеділки
         current_monday = self.today - timedelta(days=self.today.weekday())
         next_monday = current_monday + timedelta(days=7)
         
-        # Отримуємо меню один раз
         menu_data = self.fetch_data("kitchen/menu/")
         menu_map = {m['week_day']: m['dishes'] for m in menu_data.get('menu', [])}
 
-        weeks_to_sync = [
-            current_monday.strftime('%Y-%m-%d'),
-            next_monday.strftime('%Y-%m-%d')
-        ]
+        weeks = [current_monday, next_monday]
+        total_saved = 0
 
-        total_synced = 0
-
-        for week_date in weeks_to_sync:
-            print(f"📡 Запит розкладу для тижня з {week_date}...")
-            schedule_data = self.fetch_data(f"schedule/for-user/{self.user_uuid}/", params={"date": week_date})
+        for monday in weeks:
+            start_date_str = monday.strftime('%Y-%m-%d')
+            # Використовуємо правильний параметр start_date
+            schedule_data = self.fetch_data(f"schedule/for-user/{self.user_uuid}/", 
+                                          params={"start_date": start_date_str})
             
             for item in schedule_data.get('schedule', []):
                 event_date = datetime.strptime(item['date'], '%Y-%m-%d').date()
-                
-                # 1. Фільтрація минулих подій: ігноруємо все, що було до сьогодні
-                if event_date < self.today:
-                    continue
+                if event_date < self.today: continue
 
                 name = item['schedule_object']['name']
                 desc = f"Вчитель: {item.get('user', {}).get('username', 'Не вказано')}"
                 
-                # 2. Збагачення меню (тільки для майбутніх подій їжі)
                 if name in ["Сніданок", "Обід", "Вечеря"]:
                     day_menu = menu_map.get(item['week_day'], [])
                     dish = next((d for d in day_menu if d['event_name'] == name), None)
@@ -98,17 +93,19 @@ class SchoolSync:
 
                 self.upsert_event(f"sch{item['id']}", summary, desc, 
                                  f"{item['date']}T{item['start_time']}:00", 
-                                 f"{item['date']}T{item['end_time']}:00")
-                total_synced += 1
+                                 f"{item['date']}T{item['end_time']}:00",
+                                 transparency='opaque')
+                total_saved += 1
 
-        print(f"✅ Синхронізація завершена. Оброблено {total_synced} майбутніх подій.")
+        print(f"✅ Синхронізація завершена. Всього збережено подій у календар: {total_saved}")
 
-    def upsert_event(self, eid, summary, desc, start, end, is_all_day=False):
+    def upsert_event(self, eid, summary, desc, start, end, is_all_day=False, transparency='opaque'):
         t_key = 'date' if is_all_day else 'dateTime'
         body = {
             'id': eid, 'summary': summary, 'description': desc,
             'start': {t_key: start, 'timeZone': 'Europe/Kyiv'},
-            'end': {t_key: end, 'timeZone': 'Europe/Kyiv'}
+            'end': {t_key: end, 'timeZone': 'Europe/Kyiv'},
+            'transparency': transparency # 'transparent' (Free) або 'opaque' (Busy)
         }
         try:
             self.service.events().insert(calendarId=self.calendar_id, body=body).execute()
@@ -128,9 +125,5 @@ if __name__ == "__main__":
         credentials_info=json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
     )
 
-    try:
-        if args.mode == "daily": sync.sync_daily()
-        else: sync.sync_holidays()
-    except Exception as e:
-        sync.send_telegram_alert(f"🚨 Помилка School Sync: {e}")
-        raise
+    if args.mode == "schedule": sync.sync_schedule_flow()
+    else: sync.sync_holidays()
