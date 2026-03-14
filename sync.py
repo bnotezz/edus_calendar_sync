@@ -2,9 +2,11 @@ import os
 import requests
 import argparse
 import json
+import time # Додаємо для затримок
 from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError # Для обробки помилок API
 
 class SchoolSync:
     def __init__(self, host, token, calendar_id, user_uuid, credentials_info):
@@ -16,6 +18,19 @@ class SchoolSync:
         self.service = build('calendar', 'v3', credentials=creds)
         self.today = datetime.now().date()
 
+    # ... (методи fetch_data та send_telegram_alert залишаються без змін) ...
+
+    def fetch_data(self, path, params=None):
+        response = requests.get(f"{self.host}/api/{path}", headers=self.headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+        count = 0
+        if 'schedule' in data: count = len(data['schedule'])
+        elif 'menu' in data: count = len(data['menu'])
+        elif '1' in data: count = len(data['1'])
+        print(f"📡 Отримано дані з {path}. Знайдено записів: {count}")
+        return data
+
     def send_telegram_alert(self, message):
         bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
         chat_id = os.environ.get("TELEGRAM_CHAT_ID")
@@ -24,18 +39,6 @@ class SchoolSync:
             try:
                 requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=10)
             except: pass
-
-    def fetch_data(self, path, params=None):
-        response = requests.get(f"{self.host}/api/{path}", headers=self.headers, params=params)
-        response.raise_for_status()
-        data = response.json()
-        
-        count = 0
-        if 'schedule' in data: count = len(data['schedule'])
-        elif 'menu' in data: count = len(data['menu'])
-        elif '1' in data: count = len(data['1'])
-        print(f"📡 Отримано дані з {path}. Знайдено записів: {count}")
-        return data
 
     def sync_holidays(self):
         print("🏖️ Синхронізація канікул...")
@@ -55,12 +58,12 @@ class SchoolSync:
         for h in holidays:
             end_dt_obj = datetime.strptime(h['end_day'], '%Y-%m-%d').date()
             if end_dt_obj < self.today: continue
-
             gcal_end = (end_dt_obj + timedelta(days=1)).strftime('%Y-%m-%d')
             name = h['name'] if "канікули" in h['name'].lower() else f"{h['name']} канікули"
             
             self.upsert_event(f"hol{h['id']}".replace("-", ""), f"🏖️ {name}", "Відпочинок", 
                              h['start_day'], gcal_end, is_all_day=True, transparency='transparent')
+            time.sleep(0.5) # Пауза між запитами
 
     def sync_schedule_flow(self):
         print("📚 Початок синхронізації розкладу...")
@@ -85,30 +88,25 @@ class SchoolSync:
                 obj = item.get('schedule_object', {})
                 name = obj.get('name', 'Без назви')
                 obj_type = obj.get('type')
-                
                 user_info = item.get('user') or {}
                 teacher = user_info.get('username', 'Не вказано')
                 desc = f"Вчитель: {teacher}"
                 
-                # Логіка для харчування
                 if name in ["Сніданок", "Обід", "Вечеря"]:
                     day_menu = menu_map.get(item['week_day'], [])
                     dish = next((d for d in day_menu if d['event_name'] == name), None)
-                    summary = f"🍽️ {name}" # Назва без меню
-                    desc = dish['dish'] if dish else "" # Тільки текст меню в описі
-                # Логіка для інших типів подій
-                elif obj_type == 'lesson':
-                    summary = f"📚 {name}"
-                elif obj_type == 'event':
-                    summary = f"🔔 {name}"
-                else:
-                    summary = f"📝 {name}"
+                    summary = f"🍽️ {name}"
+                    desc = dish['dish'] if dish else ""
+                elif obj_type == 'lesson': summary = f"📚 {name}"
+                elif obj_type == 'event': summary = f"🔔 {name}"
+                else: summary = f"📝 {name}"
 
                 self.upsert_event(f"sch{item['id']}", summary, desc, 
                                  f"{item['date']}T{item['start_time']}:00", 
                                  f"{item['date']}T{item['end_time']}:00",
                                  transparency='opaque')
                 total_saved += 1
+                time.sleep(0.5) # <--- ОБОВ'ЯЗКОВА ПАУЗА 0.5 сек між кожним івентом
 
         print(f"✅ Синхронізація завершена. Всього збережено/оновлено подій: {total_saved}")
 
@@ -120,16 +118,31 @@ class SchoolSync:
             'end': {t_key: end, 'timeZone': 'Europe/Kyiv'},
             'transparency': transparency
         }
-        try:
-            self.service.events().insert(calendarId=self.calendar_id, body=body).execute()
-        except:
-            self.service.events().update(calendarId=self.calendar_id, eventId=eid, body=body).execute()
+        
+        # Exponential Backoff Logic
+        for n in range(5): # 5 спроб
+            try:
+                try:
+                    # Спершу пробуємо створити
+                    self.service.events().insert(calendarId=self.calendar_id, body=body).execute()
+                except HttpError as e:
+                    if e.resp.status == 409: # Конфлікт (вже існує)
+                        self.service.events().update(calendarId=self.calendar_id, eventId=eid, body=body).execute()
+                    else:
+                        raise e
+                return # Успішно - виходимо з циклу спроб
+            except HttpError as e:
+                if e.resp.status in [403, 429]: # Rate limit
+                    wait = (2 ** n) + 1
+                    print(f"⏳ Перевищено ліміт Google API. Очікування {wait} сек...")
+                    time.sleep(wait)
+                else:
+                    raise e
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", required=True)
     args = parser.parse_args()
-
     sync = SchoolSync(
         host=os.environ["SCHOOL_HOST"],
         token=os.environ["SCHOOL_TOKEN"],
@@ -137,6 +150,5 @@ if __name__ == "__main__":
         calendar_id=os.environ["GOOGLE_CALENDAR_ID"],
         credentials_info=json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
     )
-
     if args.mode == "schedule": sync.sync_schedule_flow()
     else: sync.sync_holidays()
