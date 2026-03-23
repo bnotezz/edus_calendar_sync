@@ -17,8 +17,7 @@ class SchoolSync:
         creds = service_account.Credentials.from_service_account_info(credentials_info)
         self.service = build('calendar', 'v3', credentials=creds)
         self.today = datetime.now().date()
-
-    # ... (методи fetch_data та send_telegram_alert залишаються без змін) ...
+        self.school_location = self.get_school_location()
 
     def fetch_data(self, path, params=None):
         response = requests.get(f"{self.host}/api/{path}", headers=self.headers, params=params)
@@ -39,6 +38,27 @@ class SchoolSync:
             try:
                 requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=10)
             except: pass
+
+    def get_school_location(self):
+        try:
+            general = self.fetch_data("school/settings/general/")
+            contact = self.fetch_data("school/settings/contact/")
+        except Exception as e:
+            print(f"⚠️ Не вдалося отримати локацію школи: {e}")
+            return None
+
+        name = (general.get('name') or '').strip() if isinstance(general, dict) else ''
+        address = (contact.get('address') or '').strip() if isinstance(contact, dict) else ''
+        city = (contact.get('city') or '').strip() if isinstance(contact, dict) else ''
+
+        parts = [part for part in [name, address, city] if part]
+        if not parts:
+            print("ℹ️ Локацію школи не знайдено в налаштуваннях")
+            return None
+
+        location = ", ".join(parts)
+        print(f"📍 Локація для розкладу: {location}")
+        return location
 
     def sync_holidays(self):
         print("🏖️ Синхронізація канікул...")
@@ -104,13 +124,14 @@ class SchoolSync:
                 self.upsert_event(f"sch{item['id']}", summary, desc, 
                                  f"{item['date']}T{item['start_time']}:00", 
                                  f"{item['date']}T{item['end_time']}:00",
-                                 transparency='opaque')
+                                 transparency='opaque',
+                                 location=self.school_location)
                 total_saved += 1
                 time.sleep(0.5) # <--- ОБОВ'ЯЗКОВА ПАУЗА 0.5 сек між кожним івентом
 
         print(f"✅ Синхронізація завершена. Всього збережено/оновлено подій: {total_saved}")
 
-    def upsert_event(self, eid, summary, desc, start, end, is_all_day=False, transparency='opaque'):
+    def upsert_event(self, eid, summary, desc, start, end, is_all_day=False, transparency='opaque', location=None):
         t_key = 'date' if is_all_day else 'dateTime'
         body = {
             'id': eid, 'summary': summary, 'description': desc,
@@ -118,6 +139,8 @@ class SchoolSync:
             'end': {t_key: end, 'timeZone': 'Europe/Kyiv'},
             'transparency': transparency
         }
+        if location:
+            body['location'] = location
         
         # Exponential Backoff Logic
         for n in range(5): # 5 спроб
