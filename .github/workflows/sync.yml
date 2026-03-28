@@ -26,12 +26,68 @@ jobs:
           
       - name: Install
         run: pip install -r requirements.txt
+
+      - name: 🔐 Smart Auth & Update Secrets
+        id: auth
+        env:
+          # GH_TOKEN необхідний для роботи GitHub CLI (оновлення секретів)
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          HOST: ${{ secrets.SCHOOL_HOST }}
+          LOGIN: ${{ secrets.SCHOOL_LOGIN }}
+          PASSWORD: ${{ secrets.SCHOOL_PASSWORD }}
+          ACCESS: ${{ secrets.SCHOOL_TOKEN }}
+          UUID: ${{ secrets.SCHOOL_USER_UUID }}
+          REFRESH: ${{ secrets.SCHOOL_REFRESH_TOKEN }}
+        run: |
+          # 1. Перевіряємо чи живий поточний access токен (робимо легкий запит до general)
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $ACCESS" "$HOST/api/school/settings/general/")
+          
+          # 2. Якщо токен протух (401), але є refresh токен
+          if [ "$HTTP_STATUS" != "200" ] && [ -n "$REFRESH" ]; then
+            echo "🔄 Access token застарів. Робимо Refresh..."
+            REF_RESP=$(curl -s -X POST "$HOST/api/user/token-refresh/" -F "refresh=$REFRESH")
+            NEW_ACCESS=$(echo "$REF_RESP" | jq -r '.access')
+            
+            if [ "$NEW_ACCESS" != "null" ] && [ -n "$NEW_ACCESS" ]; then
+              ACCESS=$NEW_ACCESS
+              # Оновлюємо секрет в GitHub
+              gh secret set SCHOOL_TOKEN -b"$ACCESS" --repo ${{ github.repository }}
+              HTTP_STATUS="200"
+              echo "✅ Refresh успішний. Секрет SCHOOL_TOKEN оновлено."
+            fi
+          fi
+
+          # 3. Якщо все ще 401 (refresh протух, або перший запуск)
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "⚠️ Сесія повністю недійсна. Робимо повний логін..."
+            LOG_RESP=$(curl -s -X POST "$HOST/api/user/login/" -F "login=$LOGIN" -F "password=$PASSWORD")
+            ACCESS=$(echo "$LOG_RESP" | jq -r '.access')
+            REFRESH=$(echo "$LOG_RESP" | jq -r '.refresh')
+            UUID=$(echo "$LOG_RESP" | jq -r '.uuid')
+            
+            if [ "$ACCESS" == "null" ] || [ -z "$ACCESS" ]; then
+              echo "❌ Логін не вдався! Відповідь сервера: $LOG_RESP"
+              exit 1
+            fi
+            
+            # Оновлюємо обидва секрети в GitHub
+            gh secret set SCHOOL_TOKEN -b"$ACCESS" --repo ${{ github.repository }}
+            gh secret set SCHOOL_REFRESH_TOKEN -b"$REFRESH" --repo ${{ github.repository }}
+            gh secret set SCHOOL_USER_UUID -b"$UUID" --repo ${{ github.repository }}
+            echo "✅ Логін успішний. Секрети SCHOOL_TOKEN та SCHOOL_REFRESH_TOKEN оновлено."
+          fi
+
+          # Маскуємо токен у логах та передаємо його у наступний крок
+          echo "::add-mask::$ACCESS"
+          echo "valid_token=$ACCESS" >> "$GITHUB_OUTPUT"
+          echo "::add-mask::$UUID"
+          echo "valid_uuid=$UUID" >> "$GITHUB_OUTPUT"
         
       - name: Execute
         env:
           SCHOOL_HOST: ${{ secrets.SCHOOL_HOST }}
-          SCHOOL_TOKEN: ${{ secrets.SCHOOL_TOKEN }}
-          SCHOOL_USER_UUID: ${{ secrets.SCHOOL_USER_UUID }}
+          SCHOOL_TOKEN: ${{ steps.auth.outputs.valid_token }}
+          SCHOOL_USER_UUID: ${{ steps.auth.outputs.valid_uuid }}
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
