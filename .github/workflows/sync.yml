@@ -63,18 +63,34 @@ jobs:
             LOG_RESP=$(curl -s -X POST "$HOST/api/user/login/" -F "login=$LOGIN" -F "password=$PASSWORD")
             ACCESS=$(echo "$LOG_RESP" | jq -r '.access')
             REFRESH=$(echo "$LOG_RESP" | jq -r '.refresh')
-            UUID=$(echo "$LOG_RESP" | jq -r '.uuid')
+            PARENT_UUID=$(echo "$LOG_RESP" | jq -r '.uuid')
             
             if [ "$ACCESS" == "null" ] || [ -z "$ACCESS" ]; then
               echo "❌ Логін не вдався! Відповідь сервера: $LOG_RESP"
               exit 1
             fi
             
-            # Оновлюємо обидва секрети в GitHub
+            echo "👨‍👩‍👧 Отримано UUID батьків. Шукаємо профіль учня..."
+            
+            # Робимо додатковий GET запит для отримання даних дитини
+            CHILD_RESP=$(curl -s -X GET "$HOST/api/student/parent-student/$PARENT_UUID/" -H "Authorization: Bearer $ACCESS")
+            
+            # Витягуємо UUID та ім'я першої дитини в масиві (індекс 0)
+            UUID=$(echo "$CHILD_RESP" | jq -r '.[0].user.uuid')
+            CHILD_NAME=$(echo "$CHILD_RESP" | jq -r '.[0].user.first_name')
+            
+            if [ "$UUID" == "null" ] || [ -z "$UUID" ]; then
+              echo "❌ Не вдалося знайти профіль учня! Відповідь сервера: $CHILD_RESP"
+              exit 1
+            fi
+            
+            echo "👧 Знайдено профіль: $CHILD_NAME ($UUID)"
+            
+            # Оновлюємо всі три секрети в GitHub
             gh secret set SCHOOL_TOKEN -b"$ACCESS" --repo ${{ github.repository }}
             gh secret set SCHOOL_REFRESH_TOKEN -b"$REFRESH" --repo ${{ github.repository }}
             gh secret set SCHOOL_USER_UUID -b"$UUID" --repo ${{ github.repository }}
-            echo "✅ Логін успішний. Секрети SCHOOL_TOKEN та SCHOOL_REFRESH_TOKEN оновлено."
+            echo "✅ Логін успішний. Секрети SCHOOL_TOKEN, SCHOOL_REFRESH_TOKEN та SCHOOL_USER_UUID оновлено."
           fi
 
           # Маскуємо токен у логах та передаємо його у наступний крок
