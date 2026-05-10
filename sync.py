@@ -27,10 +27,9 @@ class SchoolSync:
         if 'schedule' in data: count = len(data['schedule'])
         elif 'menu' in data: count = len(data['menu'])
         elif '1' in data: count = len(data['1'])
-        elif Array.isArray(data): count = data.length
-        elif (data !== null && typeof data === 'object'){
-            if Object.keys(data).length: count = 1
-        }
+        elif isinstance(data, list): count = len(data)
+        elif isinstance(data, dict):
+            if data: count = 1
         
         print(f"📡 Отримано дані з {path}. Знайдено записів: {count}")
         return data
