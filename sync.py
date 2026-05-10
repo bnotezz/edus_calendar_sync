@@ -27,6 +27,11 @@ class SchoolSync:
         if 'schedule' in data: count = len(data['schedule'])
         elif 'menu' in data: count = len(data['menu'])
         elif '1' in data: count = len(data['1'])
+        elif Array.isArray(data): count = data.length
+        elif (data !== null && typeof data === 'object'){
+            if Object.keys(data).length: count = 1
+        }
+        
         print(f"📡 Отримано дані з {path}. Знайдено записів: {count}")
         return data
 
@@ -66,7 +71,7 @@ class SchoolSync:
         semesters = self.fetch_data("school/year/semester/")
         holidays = exclude_data.get("1", [])
         
-        sem2 = next((s for s in semesters if s['type'] == 'two' and s['name'] == '2'), None)
+        sem2 = next((s for s in semesters if s['name'] == '2'), None)
         if sem2:
             holidays.append({
                 "id": f"summer{sem2['id']}",
