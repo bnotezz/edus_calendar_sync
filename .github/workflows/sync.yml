@@ -30,7 +30,6 @@ jobs:
       - name: 🔐 Smart Auth & Update Secrets
         id: auth
         env:
-          # GH_TOKEN необхідний для роботи GitHub CLI (оновлення секретів)
           GH_TOKEN: ${{ secrets.GH_PAT }}
           HOST: ${{ secrets.SCHOOL_HOST }}
           LOGIN: ${{ secrets.SCHOOL_LOGIN }}
@@ -39,10 +38,8 @@ jobs:
           UUID: ${{ secrets.SCHOOL_USER_UUID }}
           REFRESH: ${{ secrets.SCHOOL_REFRESH_TOKEN }}
         run: |
-          # 1. Перевіряємо чи живий поточний access токен (робимо легкий запит до general)
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $ACCESS" "$HOST/api/school/settings/general/")
           
-          # 2. Якщо токен протух (401), але є refresh токен
           if [ "$HTTP_STATUS" != "200" ] && [ -n "$REFRESH" ]; then
             echo "🔄 Access token застарів. Робимо Refresh..."
             REF_RESP=$(curl -s -X POST "$HOST/api/user/token-refresh/" -F "refresh=$REFRESH")
@@ -50,14 +47,12 @@ jobs:
             
             if [ "$NEW_ACCESS" != "null" ] && [ -n "$NEW_ACCESS" ]; then
               ACCESS=$NEW_ACCESS
-              # Оновлюємо секрет в GitHub
               gh secret set SCHOOL_TOKEN -b"$ACCESS" --repo ${{ github.repository }}
               HTTP_STATUS="200"
               echo "✅ Refresh успішний. Секрет SCHOOL_TOKEN оновлено."
             fi
           fi
 
-          # 3. Якщо все ще 401 (refresh протух, або перший запуск)
           if [ "$HTTP_STATUS" != "200" ]; then
             echo "⚠️ Сесія повністю недійсна. Робимо повний логін..."
             LOG_RESP=$(curl -s -X POST "$HOST/api/user/login/" -F "login=$LOGIN" -F "password=$PASSWORD")
@@ -71,11 +66,8 @@ jobs:
             fi
             
             echo "👨‍👩‍👧 Отримано UUID батьків. Шукаємо профіль учня..."
-            
-            # Робимо додатковий GET запит для отримання даних дитини
             CHILD_RESP=$(curl -s -X GET "$HOST/api/student/parent-student/$PARENT_UUID/" -H "Authorization: Bearer $ACCESS")
             
-            # Витягуємо UUID та ім'я першої дитини в масиві (індекс 0)
             UUID=$(echo "$CHILD_RESP" | jq -r '.[0].user.uuid')
             CHILD_NAME=$(echo "$CHILD_RESP" | jq -r '.[0].user.first_name')
             
@@ -86,27 +78,28 @@ jobs:
             
             echo "👧 Знайдено профіль: $CHILD_NAME ($UUID)"
             
-            # Оновлюємо всі три секрети в GitHub
             gh secret set SCHOOL_TOKEN -b"$ACCESS" --repo ${{ github.repository }}
             gh secret set SCHOOL_REFRESH_TOKEN -b"$REFRESH" --repo ${{ github.repository }}
             gh secret set SCHOOL_USER_UUID -b"$UUID" --repo ${{ github.repository }}
             echo "✅ Логін успішний. Секрети SCHOOL_TOKEN, SCHOOL_REFRESH_TOKEN та SCHOOL_USER_UUID оновлено."
           fi
 
-          # Маскуємо токен у логах та передаємо його у наступний крок
           echo "::add-mask::$ACCESS"
           echo "valid_token=$ACCESS" >> "$GITHUB_OUTPUT"
           echo "::add-mask::$UUID"
           echo "valid_uuid=$UUID" >> "$GITHUB_OUTPUT"
         
-      - name: Execute
+      - name: Execute and Monitor
         env:
           SCHOOL_HOST: ${{ secrets.SCHOOL_HOST }}
           SCHOOL_TOKEN: ${{ steps.auth.outputs.valid_token }}
           SCHOOL_USER_UUID: ${{ steps.auth.outputs.valid_uuid }}
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          HC_SCHEDULE_ID: ${{ secrets.HEALTHCHECKS_SCHEDULE_ID }}
+          HC_HOLIDAYS_ID: ${{ secrets.HEALTHCHECKS_HOLIDAYS_ID }}
         run: |
+          # 1. Визначаємо поточний режим (як у вашій логіці)
           MODE="${{ github.event.inputs.mode }}"
           if [ -z "$MODE" ]; then
             if [ "${{ github.event.schedule }}" == "0 5 * * 0" ]; then
@@ -115,5 +108,37 @@ jobs:
               MODE="schedule"
             fi
           fi
-          echo "🚀 Запуск у режимі: $MODE"
-          python sync.py --mode $MODE
+          echo "🚀 Режим роботи воркфлоу: $MODE"
+
+          # 2. Вибираємо відповідний ID для Healthchecks
+          if [ "$MODE" == "holidays" ]; then
+            HC_ID="$HC_HOLIDAYS_ID"
+          else
+            HC_ID="$HC_SCHEDULE_ID"
+          fi
+
+          # 3. Надсилаємо сигнал старту (якщо ID задано)
+          if [ -n "$HC_ID" ]; then
+            curl -m 10 --retry 5 "https://hc-ping.com/$HC_ID/start"
+          fi
+
+          # 4. Запускаємо Python, логуємо все в файл синхронно через tee (увімкнено -u для небуферизованого виводу)
+          # Захоплюємо stdout та stderr. Якщо скрипт впаде, збережемо статус.
+          set -o pipefail
+          python -u sync.py --mode $MODE 2>&1 | tee output.log
+          EXIT_CODE=$?
+
+          # 5. Звітуємо в Healthchecks за результатами виконання
+          if [ -n "$HC_ID" ]; then
+            if [ $EXIT_CODE -eq 0 ]; then
+              echo "Sending success ping..."
+              curl -m 10 --retry 5 --data-binary @output.log "https://hc-ping.com/$HC_ID"
+            else
+              echo "Sending failure ping..."
+              curl -m 10 --retry 5 --data-binary @output.log "https://hc-ping.com/$HC_ID/fail"
+              exit $EXIT_CODE
+            fi
+          else
+            # Якщо секрети не налаштовані, просто завершуємо з кодом скрипту
+            exit $EXIT_CODE
+          fi
