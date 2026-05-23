@@ -43,7 +43,13 @@ jobs:
           if [ "$HTTP_STATUS" != "200" ] && [ -n "$REFRESH" ]; then
             echo "🔄 Access token застарів. Робимо Refresh..."
             REF_RESP=$(curl -s -X POST "$HOST/api/user/token-refresh/" -F "refresh=$REFRESH")
-            NEW_ACCESS=$(echo "$REF_RESP" | jq -r '.access')
+
+            if echo "$REF_RESP" | jq . >/dev/null 2>&1; then
+              NEW_ACCESS=$(echo "$REF_RESP" | jq -r '.access')
+            else
+              echo "❌ Unexpected response on refresh: $REF_RESP"
+              exit 1
+            fi
             
             if [ "$NEW_ACCESS" != "null" ] && [ -n "$NEW_ACCESS" ]; then
               ACCESS=$NEW_ACCESS
@@ -56,6 +62,12 @@ jobs:
           if [ "$HTTP_STATUS" != "200" ]; then
             echo "⚠️ Сесія повністю недійсна. Робимо повний логін..."
             LOG_RESP=$(curl -s -X POST "$HOST/api/user/login/" -F "login=$LOGIN" -F "password=$PASSWORD")
+
+            if ! echo "$LOG_RESP" | jq . >/dev/null 2>&1; then
+              echo "❌ Unexpected login response: $LOG_RESP"
+              exit 1
+            fi
+            
             ACCESS=$(echo "$LOG_RESP" | jq -r '.access')
             REFRESH=$(echo "$LOG_RESP" | jq -r '.refresh')
             PARENT_UUID=$(echo "$LOG_RESP" | jq -r '.uuid')
