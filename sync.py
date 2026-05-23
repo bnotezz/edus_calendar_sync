@@ -20,7 +20,7 @@ class SchoolSync:
         self.school_location = self.get_school_location()
 
     def fetch_data(self, path, params=None):
-        response = requests.get(f"{self.host}/api/{path}", headers=self.headers, params=params)
+        response = requests.get(f"{self.host}/api/v1/{path}", headers=self.headers, params=params)
         response.raise_for_status()
         data = response.json()
         count = 0
