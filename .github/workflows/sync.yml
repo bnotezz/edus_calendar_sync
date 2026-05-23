@@ -42,7 +42,7 @@ jobs:
           
           if [ "$HTTP_STATUS" != "200" ] && [ -n "$REFRESH" ]; then
             echo "🔄 Access token застарів. Робимо Refresh..."
-            REF_RESP=$(curl -s -X POST "$HOST/api/user/token-refresh/" -F "refresh=$REFRESH")
+            REF_RESP=$(curl -s -X POST "$HOST/api/v1/user/token-refresh/" -F "refresh=$REFRESH")
 
             if echo "$REF_RESP" | jq . >/dev/null 2>&1; then
               NEW_ACCESS=$(echo "$REF_RESP" | jq -r '.access')
@@ -61,7 +61,7 @@ jobs:
 
           if [ "$HTTP_STATUS" != "200" ]; then
             echo "⚠️ Сесія повністю недійсна. Робимо повний логін..."
-            LOG_RESP=$(curl -s -X POST "$HOST/api/user/login/" -F "login=$LOGIN" -F "password=$PASSWORD")
+            LOG_RESP=$(curl -s -X POST "$HOST/api/v1/user/login/" -F "login=$LOGIN" -F "password=$PASSWORD")
 
             if ! echo "$LOG_RESP" | jq . >/dev/null 2>&1; then
               echo "❌ Unexpected login response: $LOG_RESP"
@@ -78,7 +78,7 @@ jobs:
             fi
             
             echo "👨‍👩‍👧 Отримано UUID батьків. Шукаємо профіль учня..."
-            CHILD_RESP=$(curl -s -X GET "$HOST/api/student/parent-student/$PARENT_UUID/" -H "Authorization: Bearer $ACCESS")
+            CHILD_RESP=$(curl -s -X GET "$HOST/api/v1/student/parent-student/$PARENT_UUID/" -H "Authorization: Bearer $ACCESS")
             
             UUID=$(echo "$CHILD_RESP" | jq -r '.[0].user.uuid')
             CHILD_NAME=$(echo "$CHILD_RESP" | jq -r '.[0].user.first_name')
