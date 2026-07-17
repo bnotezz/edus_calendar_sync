@@ -13,7 +13,9 @@ on:
         options:
           - schedule
           - holidays
-
+# Дозволяємо запис у репозиторій (для створення комітів і пушу)
+permissions:
+  contents: write
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -155,11 +157,24 @@ jobs:
             exit $EXIT_CODE
           fi
           
-  keepalive-job:
-    name: Keepalive Workflow
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: gautamkrishnar/keepalive-workflow@v2
+      # ======================================================================
+      # 🚀 Надійний Keepalive
+      # ======================================================================
+      - name: Keep workflow active (Native Git approach)
+        run: |
+          # Налаштовуємо системного бота GitHub Actions для підпису комітів
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # Намагаємося створити локальну гілку або перейти на вже існуючу
+          git checkout -b keep-alive-sync || git checkout keep-alive-sync
+          
+          # Оновлюємо або створюємо файл з таймстампом
+          echo "Last activity trigger: $(date -u)" > keepalive.txt
+          
+          git add keepalive.txt
+          # [skip ci] у коміті важливий, щоб цей пуш не викликав повторний запуск білдів
+          git commit -m "chore: keepalive update [skip ci]" || exit 0
+          
+          # Пушимо зміни в окрему гілку (завдяки checkout v6 та permissions: write воно пройде без паролів)
+          git push origin keep-alive-sync --force
