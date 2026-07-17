@@ -13,9 +13,6 @@ on:
         options:
           - schedule
           - holidays
-# Додаємо явні права на запис вмісту репозиторію
-permissions:
-  actions: write
 
 jobs:
   sync:
@@ -157,8 +154,12 @@ jobs:
             # Якщо секрети не налаштовані, просто завершуємо з кодом скрипту
             exit $EXIT_CODE
           fi
-      # ======================================================================
-      # 🚀 Новий крок для запобігання відключенню автоматизації
-      # ======================================================================
-      - name: Keep workflow active (prevent 60-day inactivity disable)
-        uses: gautamkrishnar/keepalive-workflow@v2
+          
+  keepalive-job:
+    name: Keepalive Workflow
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gautamkrishnar/keepalive-workflow@v2
