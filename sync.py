@@ -8,6 +8,32 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError # Для обробки помилок API
 
+SUBJECT_EMOJIS = {
+    "Математика": "🧮",
+    "Українська мова": "🇺🇦",
+    "Англійська мова": "🇬🇧",
+    "Я досліджую світ": "🌍",
+    "Інформатика": "💻",
+    "Мистецтво": "🎨",
+    "Дизайн": "🎨",
+    "Фізкультура": "⚽",
+    "Плавання": "🏊",
+    "Музика": "🎵",
+    "Театр": "🎭",
+    "Велоспорт": "🚴",
+    "Мислення": "🧠",
+    "Урок щастя": "😊",
+    "Science": "🔬",
+    "Ранкова зустріч": "🌅",
+    "Читання": "📖",
+    "Сніданок": "🍳",
+    "Обід": "🍲",
+    "Вечеря": "🍽️",
+    "Прогулянка": "🚶",
+    "Самопідготовка": "✏️",
+    "Вечірні теревені": "💬"
+}
+
 class SchoolSync:
     def __init__(self, host, token, calendar_id, user_uuid, credentials_info):
         self.host = host.rstrip('/')
@@ -64,6 +90,13 @@ class SchoolSync:
         print(f"📍 Локація для розкладу: {location}")
         return location
 
+    def get_lessons_list(self):
+        print("⏳ Отримання списку уроків...")
+        lesson_list = self.fetch_data("student/lesson-list/{self.user_uuid}")
+        print(f"✅ Отримано {len(lesson_list)} уроків.")
+        return lesson_list
+    
+
     def sync_holidays(self):
         print("🏖️ Синхронізація канікул...")
         exclude_data = self.fetch_data("school/exclude-day/")
@@ -89,16 +122,20 @@ class SchoolSync:
                              h['start_day'], gcal_end, is_all_day=True, transparency='transparent')
             time.sleep(0.5) # Пауза між запитами
 
+
+
     def sync_schedule_flow(self):
         print("📚 Початок синхронізації розкладу...")
         current_monday = self.today - timedelta(days=self.today.weekday())
         next_monday = current_monday + timedelta(days=7)
-        
+
         menu_data = self.fetch_data("kitchen/menu/")
         menu_map = {m['week_day']: m['dishes'] for m in menu_data.get('menu', [])}
 
         weeks = [current_monday, next_monday]
+        end_of_period = next_monday + timedelta(days=7)
         total_saved = 0
+        active_event_ids = set()
 
         for monday in weeks:
             start_date_str = monday.strftime('%Y-%m-%d')
@@ -111,31 +148,106 @@ class SchoolSync:
 
                 obj = item.get('schedule_object', {})
                 name = obj.get('name', 'Без назви')
+                obj_id = obj.get('id')
                 obj_type = obj.get('type')
                 user_info = item.get('user') or {}
-                teacher = user_info.get('username', 'Не вказано')
-                desc = f"Вчитель: {teacher}"
+                
+                # 1. Емоджі та Назва
+                emoji = SUBJECT_EMOJIS.get(name, "")
+                if not emoji:
+                    if obj_type == 'lesson': emoji = "📚"
+                    elif obj_type == 'event': emoji = "🔔"
+                    else: emoji = "📝"
+                
+                summary = f"{emoji} {name}"
+                
+                teacher = user_info.get('username')
+                desc = f"Вчитель: {teacher}" if teacher else ""
                 
                 if name in ["Сніданок", "Обід", "Вечеря"]:
                     day_menu = menu_map.get(item['week_day'], [])
                     dish = next((d for d in day_menu if d['event_name'] == name), None)
-                    summary = f"🍽️ {name}"
                     desc = dish['dish'] if dish else ""
-                elif obj_type == 'lesson': summary = f"📚 {name}"
-                elif obj_type == 'event': summary = f"🔔 {name}"
-                else: summary = f"📝 {name}"
 
-                self.upsert_event(f"sch{item['id']}", summary, desc, 
+                # Додаємо лінк на SVG іконку, якщо є
+                # icon_url = obj.get('icon_url')
+                # if icon_url:
+                #     desc += f"\n\nІконка предмета: {icon_url}"
+
+                # 2. Колір (лише для уроків)
+                color_id = None
+                if obj_type == 'lesson' and obj_id:
+                    # Google Calendar підтримує colorId від 1 до 11
+                    # Хешуємо id, щоб колір був завжди однаковим для одного предмету
+                    color_id = str((int(obj_id) % 11) + 1)
+
+                # 3. Приховані метадані (extendedProperties)
+                extended_properties = {
+                    "private": {
+                        "edus_object_id": str(obj_id) if obj_id else "",
+                        "edus_object_type": obj_type or "",
+                        "edus_object_name": name
+                    }
+                }
+
+                # Використовуємо комбінацію дати та номеру уроку як стабільний ID (timeslot)
+                order = item.get('order_num')
+                if order is not None:
+                    eid = f"sch{item['date'].replace('-', '')}n{order}"
+                else:
+                    eid = f"sch{item['date'].replace('-', '')}t{item['start_time'].replace(':', '')}"
+                
+                active_event_ids.add(eid)
+
+                self.upsert_event(eid, summary, desc, 
                                  f"{item['date']}T{item['start_time']}:00", 
                                  f"{item['date']}T{item['end_time']}:00",
                                  transparency='opaque',
-                                 location=self.school_location)
+                                 location=self.school_location,
+                                 color_id=color_id,
+                                 extended_properties=extended_properties)
                 total_saved += 1
                 time.sleep(0.5) # <--- ОБОВ'ЯЗКОВА ПАУЗА 0.5 сек між кожним івентом
 
+        print("🧹 Очищення неактуальних та старих подій (у т.ч. старих дублікатів)...")
+        self.cleanup_old_events(current_monday, end_of_period, active_event_ids)
+
         print(f"✅ Синхронізація завершена. Всього збережено/оновлено подій: {total_saved}")
 
-    def upsert_event(self, eid, summary, desc, start, end, is_all_day=False, transparency='opaque', location=None):
+    def cleanup_old_events(self, start_date, end_date, active_ids):
+        start_rfc = f"{start_date.strftime('%Y-%m-%d')}T00:00:00+03:00" # Часовий пояс Києва
+        end_rfc = f"{end_date.strftime('%Y-%m-%d')}T23:59:59+03:00"
+        
+        try:
+            events_result = self.service.events().list(
+                calendarId=self.calendar_id, 
+                timeMin=start_rfc, 
+                timeMax=end_rfc, 
+                maxResults=2500, 
+                singleEvents=True
+            ).execute()
+            events = events_result.get('items', [])
+            
+            deleted_count = 0
+            for event in events:
+                eid = event.get('id')
+                if eid and eid.startswith('sch') and eid not in active_ids:
+                    try:
+                        self.service.events().delete(calendarId=self.calendar_id, eventId=eid).execute()
+                        deleted_count += 1
+                        time.sleep(0.5)
+                    except HttpError as e:
+                        print(f"⚠️ Помилка видалення події {eid}: {e}")
+            
+            if deleted_count > 0:
+                print(f"🗑️ Видалено {deleted_count} старих дублікатів/скасованих подій.")
+            else:
+                print("✨ Немає подій для видалення, все актуально.")
+                
+        except Exception as e:
+            print(f"⚠️ Не вдалося виконати очищення подій: {e}")
+
+    def upsert_event(self, eid, summary, desc, start, end, is_all_day=False, transparency='opaque', location=None, color_id=None, extended_properties=None):
         t_key = 'date' if is_all_day else 'dateTime'
         body = {
             'id': eid, 'summary': summary, 'description': desc,
@@ -145,6 +257,10 @@ class SchoolSync:
         }
         if location:
             body['location'] = location
+        if color_id:
+            body['colorId'] = color_id
+        if extended_properties:
+            body['extendedProperties'] = extended_properties
         
         # Exponential Backoff Logic
         for n in range(5): # 5 спроб
