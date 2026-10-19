@@ -248,6 +248,46 @@ class EdusClient:
             params={"start_date": start_date}
         )
 
+    def get_lesson_planning(self, planning_id, class_group_id=None):
+        """
+        Retrieves planned themes and schedule for a curriculum plan (КТП).
+
+        :param planning_id: ID of the lesson planning (КТП)
+        :param class_group_id: Optional ID of the class group (for_class_group)
+        :return: Dict containing curriculum metadata and 'themes' list
+        """
+        params = {}
+        if class_group_id:
+            params["for_class_group"] = class_group_id
+        return self.fetch_data(f"teacher/lesson-planning/{planning_id}/", params=params if params else None)
+
+    def get_active_homework(self, user_uuid):
+        """
+        Retrieves active homework assignments for a student.
+
+        :param user_uuid: Student UUID
+        :return: Dict with 'next' and 'previous' lists of assignments
+        """
+        print("⏳ Отримання активних домашніх завдань...")
+        homework_data = self.fetch_data(f"student/homework-tasks/{user_uuid}/active/")
+        next_count = len(homework_data.get("next", [])) if isinstance(homework_data, dict) else 0
+        prev_count = len(homework_data.get("previous", [])) if isinstance(homework_data, dict) else 0
+        print(f"✅ Отримано домашніх завдань: {next_count} майбутніх, {prev_count} попередніх.")
+        return homework_data
+
+    def get_theme_details(self, theme_id, class_group_id=None):
+        """
+        Retrieves detailed lesson planning theme information including materials and attached files.
+
+        :param theme_id: Theme ID from curriculum planning or homework
+        :param class_group_id: Optional class group ID for filtering
+        :return: Dict with theme details and materials
+        """
+        params = {}
+        if class_group_id:
+            params["filter_class_group"] = class_group_id
+        return self.fetch_data(f"teacher/lesson-planning-theme/details/{theme_id}/", params=params if params else None)
+
     def get_canteen_menu(self):
         """Retrieves the school canteen menu mapping."""
         return self.fetch_data("kitchen/menu/")

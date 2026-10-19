@@ -1,5 +1,5 @@
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock
 from sync_service import SyncService
 
@@ -85,6 +85,88 @@ class TestSyncService(unittest.TestCase):
         # 1 fall holiday + 1 summer vacation (past holiday skipped)
         self.assertEqual(stats["total_saved"], 2)
         self.assertEqual(self.mock_calendar.upsert_event.call_count, 2)
+
+    def test_sync_schedule_with_planning_and_homework(self):
+        tomorrow = (self.today + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow_ts = datetime.combine(self.today + timedelta(days=1), datetime.min.time()).timestamp()
+
+        self.mock_edus.get_canteen_menu.return_value = {"menu": []}
+        self.mock_edus.get_lesson_list.return_value = [
+            {
+                "id": 102146,
+                "lesson": {"id": 17, "name": "Інформатика"},
+                "class_group": {"id": 2089},
+                "lesson_plannings": [{"id": 2589}]
+            }
+        ]
+        self.mock_edus.get_lesson_planning.return_value = {
+            "id": 2589,
+            "lesson": {"id": 17, "name": "Інформатика"},
+            "themes": [
+                {
+                    "id": 195322,
+                    "name": "Google Maps",
+                    "content": "Робота з картами",
+                    "date": tomorrow,
+                    "order_num": 8
+                }
+            ]
+        }
+        self.mock_edus.get_active_homework.return_value = {
+            "next": [
+                {
+                    "lesson": {"id": 17, "name": "Інформатика"},
+                    "theme": {
+                        "id": 195322,
+                        "name": "Google Maps",
+                        "content": "Робота з картами"
+                    },
+                    "homework_tasks": [
+                        {"title": "Скласти маршрут", "is_files": True}
+                    ],
+                    "prepare_till": "21 жовтня",
+                    "lesson_timestamp": tomorrow_ts,
+                    "is_completed": False,
+                    "class_group_id": 2089
+                }
+            ],
+            "previous": []
+        }
+        self.mock_edus.get_theme_details.return_value = {
+            "materials": [
+                {"files": [{"file_url": "https://cdn.example.com/map_task.png"}]}
+            ]
+        }
+        self.mock_edus.get_schedule.return_value = {
+            "schedule": [
+                {
+                    "date": tomorrow,
+                    "week_day": 2,
+                    "order_num": 1,
+                    "start_time": "10:00",
+                    "end_time": "10:45",
+                    "schedule_object": {"id": 17, "type": "lesson", "name": "Інформатика"},
+                    "user": {"username": "Наталя Бучинська"}
+                }
+            ]
+        }
+        self.mock_calendar.cleanup_events.return_value = 0
+
+        stats = self.service.sync_schedule(weeks_ahead=0)
+
+        self.assertEqual(stats["total_saved"], 1)
+        self.mock_calendar.upsert_event.assert_called_once()
+        args, kwargs = self.mock_calendar.upsert_event.call_args
+        # kwargs or args: (eid, summary, desc, start, end, ...)
+        summary = kwargs.get("summary") or args[1]
+        desc = kwargs.get("desc") or args[2]
+
+        self.assertIn("💻 Інформатика 📝", summary)
+        self.assertIn("📖 ТЕМА УРОКУ:\nGoogle Maps", desc)
+        self.assertIn("📝 ПРО УРОК:\nРобота з картами", desc)
+        self.assertIn("📌 ДОМАШНЄ ЗАВДАННЯ (до 21 жовтня):", desc)
+        self.assertIn("• Скласти маршрут", desc)
+        self.assertIn("📎 МАТЕРІАЛИ ТА ФАЙЛИ:\n• https://cdn.example.com/map_task.png", desc)
 
 
 if __name__ == "__main__":

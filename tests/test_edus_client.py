@@ -129,6 +129,30 @@ class TestEdusClient(unittest.TestCase):
         self.client.get_semesters()
         self.client.fetch_data.assert_called_with("school/year/semester/")
 
+    def test_get_lesson_planning(self):
+        self.client.fetch_data = MagicMock(return_value={"id": 2589, "themes": []})
+        res = self.client.get_lesson_planning(2589, class_group_id=2089)
+        self.client.fetch_data.assert_called_once_with(
+            "teacher/lesson-planning/2589/",
+            params={"for_class_group": 2089}
+        )
+        self.assertEqual(res["id"], 2589)
+
+    def test_get_active_homework(self):
+        self.client.fetch_data = MagicMock(return_value={"next": [{"id": 1}], "previous": []})
+        res = self.client.get_active_homework("student-uuid-999")
+        self.client.fetch_data.assert_called_once_with("student/homework-tasks/student-uuid-999/active/")
+        self.assertEqual(len(res["next"]), 1)
+
+    def test_get_theme_details(self):
+        self.client.fetch_data = MagicMock(return_value={"id": 199893, "materials": []})
+        res = self.client.get_theme_details(199893, class_group_id=2087)
+        self.client.fetch_data.assert_called_once_with(
+            "teacher/lesson-planning-theme/details/199893/",
+            params={"filter_class_group": 2087}
+        )
+        self.assertEqual(res["id"], 199893)
+
 
 if __name__ == "__main__":
     unittest.main()

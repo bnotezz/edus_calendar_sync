@@ -13,7 +13,9 @@ from datetime import datetime, timedelta
 
 from calendar_mapper import (
     map_schedule_item_to_event,
-    map_holiday_to_event
+    map_holiday_to_event,
+    build_lesson_planning_index,
+    build_homework_index
 )
 
 logger = logging.getLogger(__name__)
@@ -47,9 +49,10 @@ class SyncService:
         Executes the full schedule synchronization pipeline:
         1. Calculates weekly windows (current week + upcoming weeks)
         2. Retrieves canteen menu mappings
-        3. Retrieves and transforms schedule records
-        4. Upserts all future events into Google Calendar
-        5. Purges cancelled or shifted timeslots
+        3. Retrieves curriculum planning (КТП) and active homework assignments
+        4. Retrieves and transforms schedule records enriched with themes & homework
+        5. Upserts all future events into Google Calendar
+        6. Purges cancelled or shifted timeslots
 
         :param weeks_ahead: Number of additional future weeks to sync (default 1)
         :return: Summary dictionary {"total_saved": int, "deleted_count": int, "active_count": int}
@@ -60,13 +63,69 @@ class SyncService:
         end_of_period = weeks[-1] + timedelta(days=7)
 
         # 1. Fetch canteen menu
-        menu_data = self.edus.get_canteen_menu()
-        menu_map = {m['week_day']: m['dishes'] for m in menu_data.get('menu', []) if 'week_day' in m}
+        try:
+            menu_data = self.edus.get_canteen_menu()
+            menu_map = {m['week_day']: m['dishes'] for m in menu_data.get('menu', []) if 'week_day' in m}
+        except Exception as e:
+            logger.warning(f"⚠️ Не вдалося завантажити меню: {e}")
+            menu_map = {}
+
+        # 2. Fetch curriculum planning (КТП) for student lessons
+        plannings = {}
+        try:
+            lesson_list = self.edus.get_lesson_list(self.user_uuid)
+            for lesson_entry in (lesson_list if isinstance(lesson_list, list) else []):
+                if not isinstance(lesson_entry, dict):
+                    continue
+                plannings_list = lesson_entry.get("lesson_plannings") or []
+                class_group = lesson_entry.get("class_group") or {}
+                class_group_id = class_group.get("id") if isinstance(class_group, dict) else None
+                for p in plannings_list:
+                    if isinstance(p, dict) and p.get("id"):
+                        p_id = p["id"]
+                        if p_id not in plannings:
+                            try:
+                                plan_data = self.edus.get_lesson_planning(p_id, class_group_id=class_group_id)
+                                if isinstance(plan_data, dict):
+                                    plannings[p_id] = plan_data
+                            except Exception as pe:
+                                logger.warning(f"⚠️ Не вдалося завантажити КТП {p_id}: {pe}")
+        except Exception as e:
+            logger.warning(f"⚠️ Не вдалося завантажити список уроків для КТП: {e}")
+        planning_index = build_lesson_planning_index(plannings)
+
+        # 3. Fetch active homework assignments
+        homework_index = {}
+        all_day_homework = {}
+        materials_url_map = {}
+        try:
+            homework_data = self.edus.get_active_homework(self.user_uuid)
+            homework_index, all_day_homework = build_homework_index(homework_data)
+
+            # Точково дістаємо посилання на матеріали тільки якщо є файли
+            for hw in homework_index.values():
+                theme_id = hw.get("theme_id")
+                if hw.get("has_files") and theme_id and theme_id not in materials_url_map:
+                    try:
+                        details = self.edus.get_theme_details(theme_id, class_group_id=hw.get("class_group_id"))
+                        if isinstance(details, dict):
+                            file_urls = []
+                            for mat in details.get("materials", []):
+                                for f in mat.get("files", []):
+                                    url = f.get("file_url") or f.get("external_url")
+                                    if url:
+                                        file_urls.append(url)
+                            if file_urls:
+                                materials_url_map[theme_id] = file_urls
+                    except Exception as fe:
+                        logger.warning(f"⚠️ Не вдалося завантажити матеріали для теми {theme_id}: {fe}")
+        except Exception as e:
+            logger.warning(f"⚠️ Не вдалося завантажити активні ДЗ: {e}")
 
         total_saved = 0
         active_event_ids = set()
 
-        # 2. Iterate weeks and process schedule items
+        # 4. Iterate weeks and process schedule items
         for monday in weeks:
             start_date_str = monday.strftime('%Y-%m-%d')
             schedule_data = self.edus.get_schedule(self.user_uuid, start_date=start_date_str)
@@ -80,7 +139,11 @@ class SyncService:
                 event_spec = map_schedule_item_to_event(
                     item=item,
                     menu_map=menu_map,
-                    school_location=self.school_location
+                    school_location=self.school_location,
+                    planning_index=planning_index,
+                    homework_index=homework_index,
+                    all_day_homework=all_day_homework,
+                    materials_url_map=materials_url_map
                 )
 
                 active_event_ids.add(event_spec["eid"])
