@@ -119,6 +119,34 @@ pip list --outdated
 
 ---
 
+## 🧩 Використання `EdusClient` як Окремого Компонента
+
+Код взаємодії з порталом **Edus.school** виділено в окремий автономний модуль `edus_client.py`. Ви можете використовувати його у власних скриптах, Telegram-ботах або веб-сервісах без прив'язки до Google Календаря:
+
+```python
+from edus_client import EdusClient
+
+# Ініціалізація клієнта
+client = EdusClient(host="https://your-school.edus.school")
+
+# Автентифікація (отримання JWT токенів)
+auth_data = client.login("parent@example.com", "your_password")
+access_token = auth_data["access"]
+parent_uuid = auth_data["uuid"]
+
+# Отримання профілю учня
+students = client.get_parent_students(parent_uuid)
+student_uuid = students[0]["user"]["uuid"]
+
+# Отримання розкладу та меню
+schedule = client.get_schedule(student_uuid, start_date="2026-10-20")
+menu = client.get_canteen_menu()
+
+print(f"Отримано уроків: {len(schedule.get('schedule', []))}")
+```
+
+---
+
 ## 📅 Графік роботи (Workflows)
 
 Воркфлоу GitHub Actions налаштовано на два незалежні цикли:

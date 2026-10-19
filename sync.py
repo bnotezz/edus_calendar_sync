@@ -8,6 +8,8 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from edus_client import EdusClient
+
 SUBJECT_EMOJIS = {
     "Математика": "🧮",
     "Українська мова": "🇺🇦",
@@ -58,13 +60,17 @@ def load_dotenv_if_present():
 
 class SchoolSync:
     def __init__(self, host, token, calendar_id, user_uuid, credentials_info=None,
-                 service=None, session=None, rate_limit_delay=0.5, load_location=True):
+                 service=None, session=None, rate_limit_delay=0.5, load_location=True,
+                 edus_client=None):
         self.host = host.rstrip('/')
-        self.headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         self.calendar_id = calendar_id
         self.user_uuid = user_uuid
         self.rate_limit_delay = rate_limit_delay
         self.session = session or requests.Session()
+
+        # Edus API Client component
+        self.edus = edus_client or EdusClient(host=self.host, token=token, session=self.session)
+        self.headers = self.edus.headers
 
         if service:
             self.service = service
@@ -75,29 +81,11 @@ class SchoolSync:
             raise ValueError("Either 'service' or 'credentials_info' must be provided.")
 
         self.today = datetime.now().date()
-        self.school_location = self.get_school_location() if load_location else None
+        self.school_location = self.edus.get_school_location() if load_location else None
 
-    def fetch_data(self, path, params=None, timeout=(10, 30)):
-        clean_path = path.lstrip('/')
-        url = f"{self.host}/api/v1/{clean_path}"
-        response = self.session.get(url, headers=self.headers, params=params, timeout=timeout)
-        response.raise_for_status()
-        data = response.json()
-        count = 0
-        if 'schedule' in data:
-            count = len(data['schedule'])
-        elif 'menu' in data:
-            count = len(data['menu'])
-        elif '1' in data:
-            count = len(data['1'])
-        elif isinstance(data, list):
-            count = len(data)
-        elif isinstance(data, dict):
-            if data:
-                count = 1
-
-        print(f"📡 Отримано дані з {path}. Знайдено записів: {count}")
-        return data
+    def fetch_data(self, path, params=None, timeout=None):
+        """Delegates data fetching to EdusClient for backwards compatibility."""
+        return self.edus.fetch_data(path, params=params, timeout=timeout)
 
     def send_telegram_alert(self, message):
         bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -110,6 +98,7 @@ class SchoolSync:
                 print(f"⚠️ Telegram alert failed: {e}")
 
     def get_school_location(self):
+        """Fetches and formats school location via fetch_data."""
         try:
             general = self.fetch_data("school/settings/general/")
             contact = self.fetch_data("school/settings/contact/")
@@ -131,6 +120,7 @@ class SchoolSync:
         return location
 
     def get_lessons_list(self):
+        """Fetches lesson list via fetch_data."""
         print("⏳ Отримання списку уроків...")
         lesson_list = self.fetch_data(f"student/lesson-list/{self.user_uuid}/")
         print(f"✅ Отримано {len(lesson_list)} уроків.")
