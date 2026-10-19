@@ -184,7 +184,6 @@ class TestCalendarMapper(unittest.TestCase):
         )
         self.assertIn("📌 ДОМАШНЄ ЗАВДАННЯ (до 21 жовтня):", d3)
         self.assertIn("• Номер 123", d3)
-        self.assertIn("Статус: ⏳ Не виконано", d3)
         self.assertIn("📎 МАТЕРІАЛИ ТА ФАЙЛИ:\n• https://cdn.example.com/file1.jpg", d3)
 
     def test_map_schedule_item_to_event_with_planning_and_homework(self):
@@ -231,7 +230,6 @@ class TestCalendarMapper(unittest.TestCase):
         self.assertEqual(res_hw["summary"], "💻 Інформатика 📝")
         self.assertIn("📌 ДОМАШНЄ ЗАВДАННЯ (до 21 жовтня):", res_hw["desc"])
         self.assertIn("• Скласти маршрут від школи до дому", res_hw["desc"])
-        self.assertIn("Статус: ✅ Виконано", res_hw["desc"])
         self.assertEqual(res_hw["extended_properties"]["private"]["has_homework"], "true")
 
     def test_map_schedule_item_to_event_samopidgotovka(self):
@@ -263,9 +261,9 @@ class TestCalendarMapper(unittest.TestCase):
         res = map_schedule_item_to_event(item, all_day_homework=all_day_hw)
         self.assertEqual(res["summary"], "✏️ Самопідготовка")
         self.assertIn("✏️ САМОПІДГОТОВКА (План завдань):", res["desc"])
-        self.assertIn("1. [ ] Математика (до 21 жовтня):", res["desc"])
+        self.assertIn("1. Математика (до 21 жовтня):", res["desc"])
         self.assertIn("   • Вправа 45", res["desc"])
-        self.assertIn("2. ✅ Українська мова (до 21 жовтня):", res["desc"])
+        self.assertIn("2. Українська мова (до 21 жовтня):", res["desc"])
         self.assertIn("   • Словниковий диктант", res["desc"])
 
 

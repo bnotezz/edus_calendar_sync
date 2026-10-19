@@ -223,8 +223,7 @@ def format_event_description(teacher=None, theme_name=None, theme_content=None,
         for idx, hw in enumerate(all_day_homework, 1):
             name = hw.get("lesson_name") or "Урок"
             till = f" (до {hw['prepare_till']})" if hw.get("prepare_till") else ""
-            status_mark = "✅" if hw.get("is_completed") else "[ ]"
-            lines.append(f"{idx}. {status_mark} {name}{till}:")
+            lines.append(f"{idx}. {name}{till}:")
             for task in hw.get("tasks", []):
                 lines.append(f"   • {task}")
         return "\n".join(lines)
@@ -239,8 +238,7 @@ def format_event_description(teacher=None, theme_name=None, theme_content=None,
     if homework and homework.get("tasks"):
         till = f" (до {homework['prepare_till']})" if homework.get("prepare_till") else ""
         tasks_text = "\n".join(f"• {t}" for t in homework["tasks"])
-        status_icon = "✅ Виконано" if homework.get("is_completed") else "⏳ Не виконано"
-        blocks.append(f"📌 ДОМАШНЄ ЗАВДАННЯ{till}:\n{tasks_text}\nСтатус: {status_icon}")
+        blocks.append(f"📌 ДОМАШНЄ ЗАВДАННЯ{till}:\n{tasks_text}")
     if material_files:
         files_text = "\n".join(f"• {f}" for f in material_files)
         blocks.append(f"📎 МАТЕРІАЛИ ТА ФАЙЛИ:\n{files_text}")
