@@ -167,12 +167,12 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
           # Намагаємося створити локальну гілку або перейти на вже існуючу
-          git checkout -b keep-alive-sync || git checkout keep-alive-sync
+          git checkout -B keep-alive-sync
           
           # Оновлюємо або створюємо файл з таймстампом
           echo "Last activity trigger: $(date -u)" > keepalive.txt
           
-          git add keepalive.txt
+          git add -f keepalive.txt
           # [skip ci] у коміті важливий, щоб цей пуш не викликав повторний запуск білдів
           git commit -m "chore: keepalive update [skip ci]" || exit 0
           
